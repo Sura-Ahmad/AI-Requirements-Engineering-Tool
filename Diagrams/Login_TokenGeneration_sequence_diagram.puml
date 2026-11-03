@@ -1,0 +1,165 @@
+@startuml Login and Token Generation Sequence Diagram
+
+title "Login with Token Generation · Sequence Diagram\n<size:11>RequirementsSuperTool"
+
+actor       "User"                                                                          as U
+participant "Auth Page\n<size:10>app/auth/page.tsx\nhandleLogin()</size>"                   as FE
+participant "Axios Client\n<size:10>lib/api.ts\ninterceptors</size>"                        as AX
+
+box "FastAPI Backend"
+    participant "Auth Router\n<size:10>routers/auth.py</size>"                              as AR
+    participant "Rate Limiter\n<size:10>slowapi · 10/minute</size>"                         as RL
+    participant "Auth Service\n<size:10>auth_service.py</size>"                             as AS
+    participant "Security\n<size:10>core/security.py</size>"                                as SEC
+end box
+
+database "PostgreSQL\n<size:10>users · refresh_tokens\naudit_logs</size>"                   as PG
+
+== Step 1: User Submits Login Form ==
+
+U -> FE : enters email + password
+activate FE
+
+FE -> FE : client-side validation\n(email and password both required)
+
+FE -> AX : login(email, password)
+activate AX
+
+AX -> AR : POST /auth/login\n{\n  email    : string,\n  password : string\n}
+activate AR
+
+AR -> RL : check_rate_limit(client_ip, 10/minute)
+activate RL
+
+alt Rate limit exceeded (> 10 req/min)
+    RL --> AR : RateLimitExceeded
+    deactivate RL
+    AR --> AX : HTTP 429 Too Many Requests
+    AX --> FE : AxiosError { status: 429 }
+    FE --> U : show "Too many requests" toast
+else Rate limit OK
+    RL --> AR : allowed
+    deactivate RL
+
+    AR -> AS : login_user(email, password, db, request)
+    activate AS
+
+    == Step 2: User Lookup ==
+
+    AS -> PG : SELECT * FROM users WHERE email = :email LIMIT 1
+    activate PG
+    PG --> AS : User | None
+    deactivate PG
+
+    alt User not found
+        AS -> PG : INSERT INTO audit_logs\n(event="login_failed",\n failure_reason="user_not_found",\n ip=request.client.host, ...)
+        activate PG
+        PG --> AS : OK
+        deactivate PG
+        AS --> AR : HTTPException(401, "Invalid email or password")
+        deactivate AS
+        AR --> AX : HTTP 401 Unauthorized
+        AX --> FE : AxiosError { status: 401 }
+        FE --> U : show "Invalid email or password"
+    else User found
+
+        == Step 3: Password Verification ==
+
+        AS -> SEC : verify_password(\n  plain_password,\n  user.password_hash\n)\n[passlib CryptContext bcrypt.verify()]
+        activate SEC
+        SEC --> AS : is_valid : bool
+        deactivate SEC
+
+        alt Password incorrect
+            AS -> PG : INSERT INTO audit_logs\n(event="login_failed",\n failure_reason="wrong_password", ...)
+            activate PG
+            PG --> AS : OK
+            deactivate PG
+            AS --> AR : HTTPException(401, "Invalid email or password")
+            deactivate AS
+            AR --> AX : HTTP 401 Unauthorized
+            AX --> FE : AxiosError { status: 401 }
+            FE --> U : show "Invalid email or password"
+        else Password correct
+
+            == Step 4: Account Status Checks ==
+
+            alt user.is_active == False
+                AS -> PG : INSERT INTO audit_logs\n(event="login_failed",\n failure_reason="account_disabled", ...)
+                activate PG
+                PG --> AS : OK
+                deactivate PG
+                AS --> AR : HTTPException(401, "Account is disabled")
+                deactivate AS
+                AR --> AX : HTTP 401 Unauthorized
+                AX --> FE : AxiosError { status: 401 }
+                FE --> U : show "Account disabled" error
+            else user.is_active == True
+
+                alt user.is_verified == False
+                    AS -> PG : INSERT INTO audit_logs\n(event="login_failed",\n failure_reason="email_not_verified", ...)
+                    activate PG
+                    PG --> AS : OK
+                    deactivate PG
+                    AS --> AR : HTTPException(403, "Please verify your email before logging in")
+                    deactivate AS
+                    AR --> AX : HTTP 403 Forbidden
+                    AX --> FE : AxiosError { status: 403 }
+                    FE --> U : show "Email not verified" + Resend button
+                else user.is_verified == True
+
+                    == Step 5: Audit Log & Last Login ==
+
+                    AS -> PG : INSERT INTO audit_logs\n(event="login_success",\n user_id=user.id,\n ip=request.client.host,\n user_agent=request.headers[user-agent])
+                    activate PG
+                    PG --> AS : OK
+                    deactivate PG
+
+                    AS -> PG : UPDATE users\nSET last_login = now()\nWHERE id = user.id\n[db.commit()]
+                    activate PG
+                    PG --> AS : OK
+                    deactivate PG
+
+                    == Step 6: JWT Token Generation ==
+
+                    AS -> SEC : create_access_token({"sub": str(user.id)})\n[JWT HS256, exp = now + ACCESS_TOKEN_EXPIRE_MINUTES]
+                    activate SEC
+                    SEC --> AS : access_token : str
+                    deactivate SEC
+
+                    AS -> SEC : create_refresh_token({"sub": str(user.id)})\n[JWT HS256, exp = now + REFRESH_TOKEN_EXPIRE_DAYS]
+                    activate SEC
+                    SEC --> AS : refresh_token : str
+                    deactivate SEC
+
+                    AS -> SEC : hash_token(refresh_token)\n[SHA256 hexdigest — only hash persisted]
+                    activate SEC
+                    SEC --> AS : refresh_hash : str
+                    deactivate SEC
+
+                    AS -> PG : INSERT INTO refresh_tokens\n(\n  user_id    = user.id,\n  token_hash = refresh_hash,\n  expires_at = now + REFRESH_TOKEN_EXPIRE_DAYS,\n  is_revoked = False\n)\n[db.commit()]
+                    activate PG
+                    PG --> AS : RefreshToken saved
+                    deactivate PG
+
+                    AS --> AR : (access_token, refresh_token)
+                    deactivate AS
+
+                    AR --> AX : HTTP 200 OK\n{\n  access_token  : string,\n  refresh_token : string,\n  token_type    : "bearer"\n}
+                    deactivate AR
+
+                    AX --> FE : AxiosResponse.data : TokenResponse
+                    deactivate AX
+
+                    FE -> FE : localStorage.setItem("access_token", access_token)\nlocalStorage.setItem("refresh_token", refresh_token)
+                    FE -> FE : router.push("/dashboard")
+                    FE --> U : redirect to /dashboard
+                    deactivate FE
+
+                end
+            end
+        end
+    end
+end
+
+@enduml

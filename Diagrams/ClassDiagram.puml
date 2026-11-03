@@ -1,0 +1,580 @@
+@startuml RequirementsSuperTool_ClassDiagram
+
+skinparam classAttributeIconSize 0
+skinparam classFontSize 11
+skinparam packageStyle rectangle
+skinparam linetype ortho
+skinparam groupInheritance 2
+
+title "RequirementsSuperTool — Class Diagram\n"
+
+
+package "Models  (SQLAlchemy ORM)" as MODELS {
+
+    enum UserRole {
+        user
+        admin
+    }
+
+    enum ProjectRole {
+        product_owner
+        business_analyst
+        developer
+        stakeholder
+    }
+
+    class User {
+        + id : UUID <<PK>>
+        + email : String(255) <<unique, indexed>>
+        + password_hash : String(255)
+        + full_name : String(100)
+        + role : UserRole = user
+        + is_active : Boolean = True
+        + is_verified : Boolean = False
+        + created_at : DateTime
+        + last_login : DateTime <<nullable>>
+        ..relationships..
+        + sessions : List[UserSession]
+        + refresh_tokens : List[RefreshToken]
+        + password_reset_tokens : List[PasswordResetToken]
+        + verification_tokens : List[EmailVerificationToken]
+        + audit_logs : List[AuditLog]
+    }
+
+    class RefreshToken {
+        + id : UUID <<PK>>
+        + user_id : UUID <<FK → users.id CASCADE>>
+        + token_hash : String(255) <<unique>>
+        + expires_at : DateTime <<indexed>>
+        + is_revoked : Boolean = False
+    }
+
+    class PasswordResetToken {
+        + id : UUID <<PK>>
+        + user_id : UUID <<FK → users.id CASCADE>>
+        + token_hash : String(255) <<unique>>
+        + expires_at : DateTime
+        + is_used : Boolean = False
+        + created_at : DateTime
+    }
+
+    class EmailVerificationToken {
+        + id : UUID <<PK>>
+        + user_id : UUID <<FK → users.id CASCADE>>
+        + token_hash : String(255) <<unique>>
+        + expires_at : DateTime
+        + is_used : Boolean = False
+        + created_at : DateTime
+    }
+
+    class AuditLog {
+        + id : UUID <<PK>>
+        + user_id : UUID <<FK → users.id SET NULL, nullable>>
+        + action : String(100)
+        + entity_type : String(50)
+        + entity_id : String(255) <<nullable>>
+        + details : JSON <<nullable>>
+        + ip_address : String(45) <<nullable>>
+        + created_at : DateTime <<indexed>>
+    }
+
+    class LoginHistory {
+        + id : UUID <<PK>>
+        + user_id : UUID <<FK → users.id SET NULL, nullable>>
+        + email_attempted : String(255) <<indexed>>
+        + success : Boolean
+        + failure_reason : String(50) <<nullable>>
+        + created_at : DateTime <<indexed>>
+    }
+
+    class Domain {
+        + id : UUID <<PK>>
+        + name : String(100)
+        + name_ar : String(100)
+        + country : String(10)
+        + is_active : Boolean = True
+        + created_at : DateTime
+        ..relationships..
+        + questions : List[Question]
+        + sessions : List[UserSession]
+    }
+
+    class Question {
+        + id : UUID <<PK>>
+        + domain_id : UUID <<FK → domains.id, indexed>>
+        + question_text : Text
+        + is_active : Boolean = True
+    }
+
+    class UserSession {
+        + id : UUID <<PK>>
+        + user_id : UUID <<FK → users.id, indexed>>
+        + domain_id : UUID <<FK → domains.id, indexed>>
+        + country : String(10)
+        + role : String(50) = "business_analyst"
+        + answers : JSONB <<nullable>>
+        + document_text : Text <<nullable>>
+        + created_at : DateTime
+        ..relationships..
+        + requirements : List[Requirement]
+    }
+
+    class Requirement {
+        + id : UUID <<PK>>
+        + session_id : UUID <<FK → user_sessions.id, indexed>>
+        + code : String(20)
+        + description : Text
+        + type : String(20)
+        + is_edited : Boolean = False
+        + created_at : DateTime
+        + updated_at : DateTime
+        ..relationships..
+        + history : List[RequirementHistory]
+    }
+
+    class RequirementHistory {
+        + id : UUID <<PK>>
+        + requirement_id : UUID <<FK → requirements.id CASCADE, indexed>>
+        + old_description : Text
+        + changed_at : DateTime
+    }
+
+    ' ORM Relationships
+    User "1" *-down- "0..*" RefreshToken           : owns >
+    User "1" *-down- "0..*" PasswordResetToken     : owns >
+    User "1" *-down- "0..*" EmailVerificationToken : owns >
+    User "1" *-down- "0..*" AuditLog               : logged in >
+    User "1" ..> "0..*" LoginHistory               : tracks (FK only) >
+    User "1" *-right- "0..*" UserSession            : creates >
+    User -- UserRole
+
+    Domain "1" *-right- "0..*" Question   : contains >
+    Domain "1" *-down- "0..*" UserSession : scopes >
+
+    UserSession "1" *-right- "0..*" Requirement        : generates >
+    Requirement "1" *-right- "0..*" RequirementHistory : tracks changes >
+
+    note bottom of UserSession
+        role is stored as String(50)
+        Values correspond to ProjectRole enum
+        but no DB-level enum constraint
+    end note
+}
+
+
+package "Schemas  (Pydantic)" as SCHEMAS {
+
+    package "Auth" as SA {
+        class RegisterRequest {
+            + full_name : str
+            + email : EmailStr
+            + password : str
+        }
+        class LoginRequest {
+            + email : str
+            + password : str
+        }
+        class TokenResponse {
+            + access_token : str
+            + refresh_token : str
+            + token_type : str = "bearer"
+        }
+        class RefreshRequest {
+            + refresh_token : str
+        }
+        class UserResponse {
+            + id : UUID
+            + email : str
+            + full_name : str
+            + role : str
+            + created_at : datetime
+        }
+        class ForgotPasswordRequest {
+            + email : EmailStr
+        }
+        class ResetPasswordRequest {
+            + token : str
+            + new_password : str
+        }
+    }
+
+    package "Domain" as SD {
+        class DomainResponse {
+            + id : UUID
+            + name : str
+            + name_ar : str
+            + country : str
+        }
+        class QuestionResponse {
+            + id : UUID
+            + domain_id : UUID
+            + question_text : str
+        }
+        class AnswerItem {
+            + question_id : UUID
+            + answer : str
+        }
+        class SessionCreate {
+            + domain_id : UUID
+            + country : str
+            + role : ProjectRole
+            + answers : List[AnswerItem]
+        }
+        class SessionResponse {
+            + id : UUID
+            + domain_id : UUID
+            + country : str
+            + role : str
+        }
+        SessionCreate *-- AnswerItem
+    }
+
+    package "Requirements" as SR {
+        class GenerateRequirementsRequest {
+            + session_id : UUID
+            + document_text : Optional[str] = ""
+        }
+        class RequirementItem {
+            + id : Optional[UUID]
+            + code : str
+            + description : str
+            + type : str
+        }
+        class RequirementsResponse {
+            + session_id : UUID
+            + functional : List[RequirementItem]
+            + non_functional : List[RequirementItem]
+            + total : int
+        }
+        class ClassifiedRequirementsResponse {
+            + session_id : UUID
+            + functional : List[RequirementItem]
+            + non_functional : List[RequirementItem]
+            + functional_count : int
+            + non_functional_count : int
+            + total : int
+        }
+        class AddRequirementRequest {
+            + session_id : str
+            + type : Literal["functional","non_functional"]
+            + description : str
+        }
+        class UpdateRequirementRequest {
+            + description : str
+        }
+        class UpdateRequirementResponse {
+            + id : UUID
+            + code : str
+            + description : str
+            + type : str
+            + is_edited : bool
+        }
+        RequirementsResponse *-- RequirementItem
+        ClassifiedRequirementsResponse *-- RequirementItem
+    }
+
+    package "Upload" as SU {
+        class TextInput {
+            + text : str
+            + session_id : str = ""
+        }
+        class ProcessedInput {
+            + original_length : int
+            + processed_text : str
+            + pii_detected : bool
+            + input_type : str
+        }
+    }
+
+    package "SRS" as SS {
+        class SRSRequest {
+            + session_id : UUID
+            + project_name : str
+            + project_description : Optional[str] = ""
+        }
+        class SRSResponse {
+            + session_id : UUID
+            + project_name : str
+            + content : str
+            + format : str = "IEEE"
+        }
+    }
+
+    package "Use Cases" as SUC {
+        class UseCasesRequest {
+            + session_id : UUID
+        }
+        class UseCaseItem {
+            + use_case_id : str
+            + title : str
+            + actor : str
+            + trigger : str
+            + preconditions : str
+            + main_flow : str
+            + alternative_flows : str
+            + exception_flows : str
+            + postconditions : str
+            + priority : str
+            + related_requirements : str
+        }
+        class UseCasesResponse {
+            + session_id : UUID
+            + use_cases : List[UseCaseItem]
+            + total : int
+        }
+        UseCasesResponse *-- UseCaseItem
+    }
+
+    package "CrossCheck" as SCC {
+        class IssueItem {
+            + requirement_id : UUID
+            + code : str
+            + description : str
+            + issue_type : str
+            + issue_detail : str
+            + highlight_color : str
+            + conflict_with : str = ""
+        }
+        class CrossCheckResponse {
+            + session_id : UUID
+            + issues : List[IssueItem]
+            + ambiguities_count : int
+            + duplicates_count : int
+            + inconsistencies_count : int
+            + total_issues : int
+        }
+        CrossCheckResponse *-- IssueItem
+    }
+}
+
+
+package "Core  Utilities" as CORE {
+
+    class Settings <<singleton>> {
+        + DATABASE_URL : str
+        + SECRET_KEY : str
+        + ALGORITHM : str
+        + ACCESS_TOKEN_EXPIRE_MINUTES : int
+        + REFRESH_TOKEN_EXPIRE_DAYS : int
+        + CLAUDE_MODEL : str
+        + QDRANT_URL : str
+        + QDRANT_API_KEY : str
+        + ANTHROPIC_API_KEY : str
+        + BREVO_API_KEY : str
+        + FRONTEND_URL : str
+        + KNOWLEDGE_BASE_PATH : str
+        + CORS_ORIGINS : str
+    }
+
+    class SecurityCore <<utility>> {
+        + hash_password(password: str) : str
+        + verify_password(plain: str, hashed: str) : bool
+        + create_access_token(data: dict) : str
+        + create_refresh_token(data: dict) : str
+        + verify_token(token: str) : dict | None
+        - pwd_context : CryptContext <<bcrypt>>
+    }
+
+    class EmailCore <<utility>> {
+        + send_verification_email(to_email, full_name, verify_link) : None
+        + send_reset_email(to_email, full_name, reset_link) : None
+        - _BREVO_API_URL : str
+    }
+
+    class PIICore <<utility>> {
+        + has_pii(text: str) : bool
+        + remove_pii(text: str) : str
+        - _get_analyzer() : AnalyzerEngine
+        - _get_anonymizer() : AnonymizerEngine
+        - _analyzer : AnalyzerEngine <<singleton>>
+        - _anonymizer : AnonymizerEngine <<singleton>>
+    }
+
+    class KnowledgeBase <<utility>> {
+        + retrieve_context(domain, query, limit) : str
+        + load_pdf(file_path, domain, country, entry_id) : int
+        + text_to_embedding(text: str) : list[float]
+        + ensure_collection() : None
+        + chunk_text(text, chunk_size) : list[str]
+        - _get_qdrant_client() : QdrantClient <<singleton>>
+        - _get_model() : SentenceTransformer <<singleton>>
+        ~ COLLECTION_NAME : str = "knowledge_base"
+        ~ CHUNK_SIZE : int = 500
+        ~ VECTOR_SIZE : int = 384
+    }
+
+    class Database <<utility>> {
+        + get_db() : Generator[Session]
+        ~ engine : Engine
+        ~ SessionLocal : sessionmaker
+        ~ Base : DeclarativeBase
+    }
+}
+
+
+package "Services" as SERVICES {
+
+    class AuthService <<service>> {
+        + register_user(email, password, full_name, bg_tasks, db) : None
+        + verify_email_token(token, db) : tuple[str, str]
+        + login_user(email, password, db, request) : tuple[str, str]
+        + logout_user(refresh_token, db) : bool
+        + refresh_tokens(refresh_token, db) : tuple[str, str]
+        + get_current_user(authorization, db) : User
+        + get_current_admin(user) : User
+        + initiate_password_reset(email, bg_tasks, db) : None
+        + complete_password_reset(token, new_password, db) : None
+        + resend_verification(email, bg_tasks, db) : None
+        - hash_token(token) : str
+        - create_tokens(user_id) : tuple[str, str]
+        - validate_password_strength(password) : None
+        - store_refresh_token(user_id, token, db) : None
+    }
+
+    class DomainService <<service>> {
+        + get_domains(country, db) : list[Domain]
+        + get_questions(domain_id, db) : list[Question]
+        + create_session(domain_id, country, role, answers, user_id, db) : UserSession
+    }
+
+    class RequirementService <<service>> {
+        + generate_requirements(session_id, document_text, db, user_id) : RequirementsResponse
+        + get_requirements(session_id, user_id, db) : RequirementsResponse
+        + get_classified_requirements(session_id, user_id, db) : ClassifiedRequirementsResponse
+        + get_requirements_for_session(session_id, db, req_type) : list
+        + add_requirement(session_id, type, description, db, user_id) : dict
+        + update_requirement(requirement_id, description, db, user_id) : dict
+        + delete_requirement(requirement_id, db, user_id) : dict
+        - get_questions_for_answers(raw_answers, db) : dict
+        - split_by_type(requirements) : tuple
+    }
+
+    class AIService <<service>> {
+        + generate_requirements(domain, role, answers, document_text, country) : dict
+        + generate_use_cases(domain_name, country, requirements) : list
+        + generate_srs(project_name, description, domain_name, country, fr, nfr) : str
+        + run_crosscheck(req_list, answers_text, kb_context) : list
+        - _get_client() : anthropic.Anthropic <<singleton>>
+        - _ROLE_INSTRUCTIONS : dict
+    }
+
+    class FileService <<service>> {
+        + extract_document(file: UploadFile) : tuple[str, str]
+        + extract_text_from_pdf(file_bytes: bytes) : str
+        + extract_text_from_docx(file_bytes: bytes) : str
+        + process_pii(text: str) : tuple[bool, str]
+        ~ ALLOWED_CONTENT_TYPES : set
+        ~ MAX_FILE_SIZE : int = 20MB
+    }
+
+    class ProfileService <<service>> {
+        + format_user(user) : dict
+        + get_user_sessions(user_id, db) : list
+        + get_session_by_id(session_id, user_id, db) : dict
+        + update_profile(user, email, full_name, db) : dict
+        + change_password(user, current_password, new_password, db) : None
+    }
+
+    class AuditService <<service>> {
+        + log_action(db, user_id, action, entity_type, entity_id, details, request) : None
+        + log_login(db, email, success, user_id, request, failure_reason) : None
+        + get_audit_logs(db, page, limit, user_id, action, date_from, date_to) : dict
+        + get_login_history(db, page, limit, email, success, date_from, date_to) : dict
+        + get_failed_login_attempts(db, hours, limit) : list
+    }
+
+    class SRSService <<service>> {
+        + generate(session_id, project_name, project_description, db, user_id) : dict
+    }
+
+    class UseCasesService <<service>> {
+        + generate(session_id, db, user_id) : dict
+    }
+
+    class CrossCheckService <<service>> {
+        + run(session_id, db, user_id) : tuple
+        - build_answers_text(raw_answers, questions_map) : str
+        - map_issues(issues_data, requirements) : tuple
+        ~ COLOR_MAP : dict
+    }
+
+    class AdminService <<service>> {
+        + get_dashboard_stats(db) : dict
+        + get_all_users_with_session_counts(db) : list
+        + toggle_user_active(user_id, admin_id, db, request) : dict
+        + get_all_sessions_with_details(db) : list
+        + create_domain(name, name_ar, country, admin_id, db, request) : dict
+        + update_domain(domain_id, data, admin_id, db, request) : dict
+        + delete_domain(domain_id, admin_id, db, request) : dict
+        + create_question(domain_id, text, admin_id, db, request) : dict
+        + update_question(question_id, data, admin_id, db, request) : dict
+        + delete_question(question_id, admin_id, db, request) : dict
+        + get_sessions_with_documents(db) : list
+    }
+
+    class KBService <<service>> {
+        + list_files() : list
+        + upload_file(file, domain, country, admin_id, db, request) : dict
+        + delete_file(entry_id, admin_id, db, request) : dict
+        + load_all() : None
+        ~ ALLOWED_EXTENSIONS : set = {"pdf"}
+        ~ MAX_FILE_SIZE : int = 50MB
+    }
+}
+
+
+AuthService ..> User                      : uses
+AuthService ..> RefreshToken              : uses
+AuthService ..> PasswordResetToken        : uses
+AuthService ..> EmailVerificationToken    : uses
+AuthService ..> SecurityCore              : uses
+AuthService ..> EmailCore                 : uses
+AuthService ..> AuditService              : delegates
+
+DomainService ..> Domain                  : queries
+DomainService ..> Question                : queries
+DomainService ..> UserSession             : creates
+
+RequirementService ..> Requirement        : manages
+RequirementService ..> RequirementHistory : records
+RequirementService ..> UserSession        : reads
+RequirementService ..> Question           : reads
+RequirementService ..> AIService          : calls
+
+AIService ..> KnowledgeBase              : retrieves context
+AIService ..> Settings                   : reads config
+
+FileService ..> PIICore                  : scrubs
+
+ProfileService ..> User                  : reads
+ProfileService ..> UserSession           : reads
+ProfileService ..> SecurityCore          : uses
+
+AuditService ..> AuditLog               : writes
+AuditService ..> LoginHistory           : writes
+
+SRSService ..> Requirement              : reads
+SRSService ..> UserSession              : reads
+SRSService ..> Domain                   : reads
+SRSService ..> AIService                : calls
+
+UseCasesService ..> Requirement         : reads
+UseCasesService ..> UserSession         : reads
+UseCasesService ..> AIService           : calls
+
+CrossCheckService ..> Requirement       : reads
+CrossCheckService ..> UserSession       : reads
+CrossCheckService ..> AIService         : calls
+CrossCheckService ..> KnowledgeBase     : retrieves context
+
+AdminService ..> User                   : manages
+AdminService ..> Domain                 : manages
+AdminService ..> Question               : manages
+AdminService ..> UserSession            : reads
+AdminService ..> Requirement            : reads
+AdminService ..> AuditService           : delegates
+
+KBService ..> KnowledgeBase             : manages
+KBService ..> AuditService              : delegates
+
+@enduml

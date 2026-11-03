@@ -1,0 +1,172 @@
+@startuml UploadDocument_Sequence
+
+title "Upload Document — Sequence Diagram"
+
+actor       "User"                                                                          as U
+participant "Dashboard Page\n<size:10>app/dashboard/page.tsx\nStep 4 of 5</size>"          as FE
+participant "Axios Client\n<size:10>lib/api.ts\nprocessDocument()</size>"                   as AX
+
+box "FastAPI Backend"
+    participant "Upload Router\n<size:10>routers/upload.py\nPOST /input/document</size>"    as UR
+    participant "Rate Limiter\n<size:10>slowapi · 5/minute</size>"                          as RL
+    participant "Auth Middleware\n<size:10>get_current_user()</size>"                       as AM
+    participant "File Service\n<size:10>file_service.py\nextract_document()</size>"         as FS
+    participant "PII Service\n<size:10>core/pii.py\nPresidio + spacy</size>"               as PII
+end box
+
+
+== Step 1: User Uploads a Document ==
+
+U -> FE : arrives at Step 4\n(document upload step)
+activate FE
+
+FE --> U : render file upload area\n(accept=".pdf,.docx")
+
+U -> FE : clicks file input area
+FE --> U : opens OS file picker
+U -> FE : selects file\n(inputFile: File object)
+FE -> FE : setInputFile(e.target.files[0])
+FE --> U : show selected filename
+
+U -> FE : clicks "Next" button
+
+
+
+FE -> FE : validate file extension (.pdf or .docx)
+
+alt Invalid file extension
+    FE --> U : show "Only PDF and Word (.docx) supported" error
+else Extension valid
+
+    FE -> AX : processDocument(inputFile)
+    activate AX
+
+    
+
+    AX -> UR : POST /input/document\nContent-Type: multipart/form-data\nAuthorization: Bearer <token>\nBody: FormData { file: UploadFile }
+    activate UR
+
+    == Step 2: Rate Limit & Authentication ==
+
+    UR -> RL : check_rate_limit(client_ip, 5/minute)
+    activate RL
+
+    alt Rate limit exceeded (> 5 req/min)
+        RL --> UR : RateLimitExceeded
+        deactivate RL
+        UR --> AX : HTTP 429 Too Many Requests
+        AX --> FE : AxiosError { status: 429 }
+        FE --> U : show "Too many requests" error
+    else Rate limit OK
+        RL --> UR : allowed
+        deactivate RL
+
+        UR -> AM : Depends(get_current_user)\nextract Bearer token
+        activate AM
+        AM --> UR : current_user: User
+        deactivate AM
+
+        UR -> FS : extract_document(file: UploadFile)
+        activate FS
+
+        == Step 3: Content-Type Validation ==
+
+        FS -> FS : check file.content_type in ALLOWED_CONTENT_TYPES:\n{\n  "application/pdf",\n  "application/vnd.openxmlformats-officedocument\n   .wordprocessingml.document"\n}
+
+        alt Content-Type not allowed
+            FS --> UR : HTTPException(400,\n"Only PDF and DOCX files are allowed")
+            deactivate FS
+            UR --> AX : HTTP 400 Bad Request
+            AX --> FE : AxiosError { status: 400 }
+            FE --> U : show "Only PDF and DOCX files are allowed"
+        else Content-Type valid
+
+            == Step 4: Read File & Size Validation ==
+
+            FS -> FS : file_bytes = await file.read()\nMAX_FILE_SIZE = 20 * 1024 * 1024 (20 MB)\ncheck len(file_bytes) <= MAX_FILE_SIZE
+
+            alt File exceeds 20 MB
+                FS --> UR : HTTPException(413,\n"File size exceeds the 20 MB limit")
+                deactivate FS
+                UR --> AX : HTTP 413 Content Too Large
+                AX --> FE : AxiosError { status: 413 }
+                FE --> U : show "File too large — maximum is 20 MB"
+            else File size OK
+
+                == Step 5: Text Extraction ==
+
+                alt file.content_type == "application/pdf"
+                    FS -> FS : extract_text_from_pdf(file_bytes)
+                    note right of FS
+                      import pdfplumber
+                      with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+                        for page in pdf.pages:
+                          raw_text += page.extract_text() or ""
+                      Iterates all pages and joins text.
+                    end note
+                    FS -> FS : raw_text = all pages joined
+                else file.content_type == "application/vnd...docx"
+                    FS -> FS : extract_text_from_docx(file_bytes)
+                    note right of FS
+                      import docx
+                      doc = docx.Document(BytesIO(file_bytes))
+                      for para in doc.paragraphs:
+                        raw_text += para.text + "\n"
+                      Iterates all paragraphs and joins text.
+                    end note
+                    FS -> FS : raw_text = all paragraphs joined
+                end
+
+                alt Extracted text is empty or whitespace-only
+                    FS --> UR : HTTPException(400,\n"Could not extract text from document")
+                    deactivate FS
+                    UR --> AX : HTTP 400 Bad Request
+                    AX --> FE : AxiosError { status: 400 }
+                    FE --> U : show "Could not extract text\n(document may be image-only or scanned)"
+                else Text extracted successfully
+
+                    == Step 6: PII Detection & Scrubbing ==
+
+                    FS -> PII : has_pii(raw_text)\n[AnalyzerEngine.analyze(text, language="en")]
+                    activate PII
+                    note right of PII
+                      Presidio detects PII entities:
+                      PERSON, EMAIL_ADDRESS, PHONE_NUMBER,
+                      CREDIT_CARD, US_SSN, PASSPORT,
+                      DATE_TIME, ORGANIZATION, LOCATION, etc.
+                      NLP model: spacy en_core_web_sm
+                      Singleton — lazily initialized on first call.
+                    end note
+                    PII --> FS : pii_found : bool
+                    deactivate PII
+
+                    alt PII detected in document
+                        FS -> PII : remove_pii(raw_text)\n[AnonymizerEngine.anonymize(\n  text=raw_text,\n  analyzer_results=results\n)]
+                        activate PII
+                        PII --> FS : cleaned_text : str\n(entities replaced with type tags\ne.g. <PERSON>, <EMAIL_ADDRESS>)
+                        deactivate PII
+                    else No PII detected
+                        FS -> FS : cleaned_text = raw_text (unchanged)
+                    end
+
+                    FS --> UR : (pii_found: bool, cleaned_text: str)\ninput_type = "pdf" | "docx"
+                    deactivate FS
+
+                    == Step 7: Return Response ==
+
+                    UR --> AX : HTTP 200 OK\n{\n  original_length : int,\n  processed_text  : string,\n  pii_detected    : boolean,\n  input_type      : "pdf" | "docx"\n}
+                    deactivate UR
+
+                    AX --> FE : AxiosResponse.data : ProcessedInput
+                    deactivate AX
+
+                    FE -> FE : setProcessedText(data.processed_text)\nsetPiiDetected(data.pii_detected)
+
+                    FE --> U :  "Continue to Generate" button
+                end
+            end
+        end
+    end
+end
+
+@enduml
