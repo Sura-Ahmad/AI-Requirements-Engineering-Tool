@@ -7,6 +7,6 @@ The recordings demonstrate various system features, user interactions, and AI-as
 
 ## Testing Recordings
 
-[View System Testing Recordings on Google Drive](https://drive.google.com/file/d/1ll4HhTzAgg-YOUvfYo8m9fxiH7mnpkGb/view?usp=drive_link)
+[View System Testing Recordings on Google Drive](https://drive.google.com/drive/folders/144CRKRUJ-AFVFtItULgUe2JcveV1enIl?usp=drive_link)
 
 **Note:** Each recording represents an individual testing scenario rather than a complete end-to-end demonstration.
