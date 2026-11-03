@@ -1,0 +1,34 @@
+# Environment files 
+backend/.env
+frontend/.env.local
+frontend/.env*.local
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+backend/venv/
+backend/.pytest_cache/
+backend/test.db
+*.db
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+
+
+# IDE and editor artifacts
+.vscode/
+.idea/
+.claude/
+
+# Knowledge_base uploaded files
+backend/Knowledge_base/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,130 @@
+@startuml RequirementsSuperTool_UseCases
+
+skinparam packageStyle rectangle
+skinparam actorStyle awesome
+skinparam usecase {
+  BackgroundColor #EEF4FF
+  BorderColor #4A90D9
+  FontSize 12
+}
+skinparam actor {
+  BackgroundColor #FFF8E7
+  BorderColor #E8A020
+}
+skinparam package {
+  BackgroundColor #F8F9FA
+  BorderColor #AAAAAA
+}
+skinparam ArrowColor #555555
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #E8A020
+
+left to right direction
+
+'Actors
+actor "Regular User" as U
+actor Admin          as A
+
+A -|> U
+
+rectangle "Requirements Super Tool" {
+
+  ' ── Authentication 
+  (Register)
+  (Login)
+  (Forgot Password)
+
+  ' ── Profile Management 
+  (View Profile)
+  (Update Profile)
+  (Change Password)
+  (View My Sessions)
+
+  ' ── Session Setup 
+  (Browse Domains by Country)
+  (Select Role)
+  rectangle "User Input"{
+  (Answer Questionnaire)
+  (Upload Document)
+  (Submit Text Input)
+  }
+  ' ── Requirements 
+  (Generate Requirements)
+  (View Classified Requirements)
+  (Add Requirement)
+  (Edit Requirement)
+  (Delete Requirement)
+  (Cross-Check Requirements)
+
+  ' ── Documentation 
+  (Generate SRS Document)
+  (Download SRS)
+  (Generate Use Case Diagram)
+  (Download Use Case)
+
+  ' ── Administration 
+  rectangle "Admin Privileges"{
+  (View All Users)
+  (Toggle User Active)
+  (Manage Domains)
+  (Manage Domain Questions)
+  (Manage Knowledge Base)
+  (View Dashboard Stats)
+  (View All Sessions & Documents)
+  (View Audit Logs)
+  (View Login History)
+  }
+}
+
+note top of (Register)
+  {Only Regular User — Admin created via DB}
+end note
+note top of (Answer Questionnaire)
+  {one of these input methods must be used before generating requirements}
+end note
+
+
+' ── Regular User associations 
+U --> (Register)
+U --> (Login)
+U --> (Forgot Password)
+U --> (View Profile)
+U --> (View My Sessions)
+U --> (Generate Requirements)
+U --> (View Classified Requirements)
+U --> (Add Requirement)
+U --> (Edit Requirement)
+U --> (Delete Requirement)
+U --> (Generate SRS Document)
+U --> (Generate Use Case Diagram)
+
+' ── Admin-only associations 
+A --> (View All Users)
+A --> (Manage Domains)
+A --> (Manage Knowledge Base)
+A --> (View Dashboard Stats)
+A --> (View All Sessions & Documents)
+A --> (View Audit Logs)
+A --> (View Login History)
+
+' ── <<include>> relationships 
+(Manage Domain Questions)    .> (Manage Domains)              : <<include>>
+(Generate Requirements)      .> (Browse Domains by Country)   : <<include>>
+(Generate Requirements)      .> (Select Role)                 : <<include>>
+
+' ── <<extend>> relationships
+' (one of these input methods must be used before generating)
+(Answer Questionnaire)         .> (Generate Requirements)      : <<extend>>
+(Upload Document)              .> (Generate Requirements)      : <<extend>>
+(Submit Text Input)            .> (Generate Requirements)      : <<extend>>
+
+(Login)                        .> (Register)                   : <<extend>>
+(Update Profile)               .> (View Profile)               : <<extend>>
+(Change Password)              .> (View Profile)               : <<extend>>
+(View Classified Requirements) .> (Generate Requirements)          : <<extend>>
+(Cross-Check Requirements)     .> (Generate Requirements)            : <<extend>>
+(Download SRS)               .> (Generate SRS Document)        : <<extend>>
+(Download Use Case)          .> (Generate Use Case Diagram)    : <<extend>>
+(Toggle User Active)         .> (View All Users)               : <<extend>>
+
+@enduml
